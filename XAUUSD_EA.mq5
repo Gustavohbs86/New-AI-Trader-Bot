@@ -4,24 +4,23 @@
 //|     e envia OHLCV ao modelo ONNX para obter sinal              |
 ///////////////////////////////////////////////////////////////////////
 
-#include <WinAPI\shell32.mqh>    // ShellExecuteA
-#include <Files\File.mqh>        // FileOpen, FileReadNumber, etc.
+#import "kernel32.dll"
+int WinExec(string lpCmdLine, int uCmdShow);
+#import
 
-//=== Parâmetros de entrada ===
-input ENUM_TIMEFRAMES InpTimeframe = PERIOD_M1;    // Timeframe para fetch
-input string            InpInstrument  = "xauusd"; // Instrumento
+#define SW_HIDE 0
 
 //=== Protótipos ===
 bool FetchDukascopyCSV(const string timeframe, const string outPath);
 bool LoadCSVtoInputs(const string path, double &inputs[]);
-int  PredictSignal(const double inputs[], double &tp, double &sl);
+int  PredictSignal(const double &inputs[], double &tp, double &sl);
 
 //+------------------------------------------------------------------+
 //| Função de inicialização                                          |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("EA XAUUSD iniciado. Timeframe: ", EnumToString(InpTimeframe));
+   Print("EA XAUUSD iniciado. Timeframe: ", EnumToString(Period()));
    return(INIT_SUCCEEDED);
 }
 
@@ -34,19 +33,27 @@ void OnTick()
    if(!first) return;            // executa apenas uma vez
    first = false;
 
-   // Converte ENUM_TIMEFRAMES em código string
+   // Converte ENUM_TIMEFRAMES em string para o timeframe atual
    string tf;
-   switch(InpTimeframe)
+   switch(Period())
    {
       case PERIOD_M1:  tf = "m1";  break;
       case PERIOD_M5:  tf = "m5";  break;
       case PERIOD_M15: tf = "m15"; break;
+      case PERIOD_M30: tf = "m30"; break;
       case PERIOD_H1:  tf = "h1";  break;
-      default: tf = "m1";
+      case PERIOD_H4:  tf = "h4";  break;
+      case PERIOD_D1:  tf = "d1";  break;
+      case PERIOD_W1:  tf = "w1";  break;
+      case PERIOD_MN1: tf = "mn1"; break;
+      default:
+         Print("Timeframe não suportado: ", EnumToString(Period()));
+         return;
    }
 
-   // Define caminho para salvar CSV
-   string csvPath = TerminalInfoString(TERMINAL_DATA_PATH) + "\\MQL5\\Files\\" + InpInstrument + "_" + tf + ".csv";
+   // Define o caminho para salvar o arquivo CSV
+   string symbol = Symbol(); // Obtém o símbolo do gráfico atual
+   string csvPath = TerminalInfoString(TERMINAL_DATA_PATH) + "\\MQL5\\Files\\" + symbol + "_" + tf + ".csv";
 
    // 1) Buscar CSV via dukascopy-node
    if(!FetchDukascopyCSV(tf, csvPath))
@@ -77,33 +84,28 @@ void OnTick()
 bool FetchDukascopyCSV(const string timeframe, const string outPath)
 {
    datetime toTime   = TimeCurrent();
-   datetime fromTime;
-
-   if(timeframe == "m1")   fromTime = toTime - 100*60;
-   else if(timeframe == "m5")   fromTime = toTime - 100*5*60;
-   else if(timeframe == "m15")  fromTime = toTime - 100*15*60;
-   else if(timeframe == "h1")   fromTime = toTime - 100*60*60;
-   else                            fromTime = toTime - 100*60;
+   datetime fromTime = toTime - 100 * PeriodSeconds(Period()); // Últimos 100 candles
 
    string fromStr = TimeToString(fromTime, TIME_DATE|TIME_SECONDS) + "Z";
    string toStr   = TimeToString(toTime,   TIME_DATE|TIME_SECONDS) + "Z";
 
-   // Monta comando Windows
+   // Usa o caminho completo para o executável
    string cmd = StringFormat(
-      "cmd.exe /C dukascopy-node -i %s -from %s -to %s -t %s -f csv > \"%s\"",
-      InpInstrument, fromStr, toStr, timeframe, outPath
+      "\"C:\\Users\\sheyl\\AppData\\Roaming\\npm\\dukascopy-node.cmd\" -i %s -from \"%s\" -to \"%s\" -t %s -f csv > \"%s\"",
+      Symbol(), fromStr, toStr, timeframe, outPath
    );
 
-   long result = ShellExecuteA(
-      0,       // hwnd
-      "open",
-      "cmd.exe",
-      StringSubstr(cmd, 8), // retira "cmd.exe /C "
-      NULL,
-      SW_HIDE
-   );
-   if(result <= 32)
+   Print("Comando gerado: ", cmd);  // Para depuração
+
+   // Usa WinExec para executar o comando
+   int result = WinExec("cmd.exe /C " + cmd, SW_HIDE);
+
+   // Verifica se o comando foi executado
+   if(result <= 31)
+   {
+      Print("Erro ao executar WinExec. Código: ", result);
       return(false);
+   }
 
    // Espera arquivo aparecer (timeout ~5s)
    for(int i=0; i<50; i++)
@@ -111,6 +113,7 @@ bool FetchDukascopyCSV(const string timeframe, const string outPath)
       if(FileIsExist(outPath)) return(true);
       Sleep(100);
    }
+   Print("Arquivo CSV não encontrado: ", outPath);
    return(false);
 }
 
@@ -135,7 +138,7 @@ bool LoadCSVtoInputs(const string path, double &inputs[])
       inputs[i*5+2] = FileReadNumber(fh); // low
       inputs[i*5+3] = FileReadNumber(fh); // close
       inputs[i*5+4] = FileReadNumber(fh); // volume
-      FileReadLine(fh);  // resto da linha
+      FileSeek(fh, 0, 1);  // 1 equivale a FILE_CURRENT
    }
    FileClose(fh);
    return(true);
@@ -144,7 +147,7 @@ bool LoadCSVtoInputs(const string path, double &inputs[])
 //+------------------------------------------------------------------+
 //| Stub para função que envia dados ao modelo ONNX                  |
 //+------------------------------------------------------------------+
-int PredictSignal(const double inputs[], double &tp, double &sl)
+int PredictSignal(const double &inputs[], double &tp, double &sl)
 {
    // TODO: Implemente a chamada ao ONNXRuntime, passando inputs[] e obtendo signal, tp, sl
    tp = 0.0;
@@ -153,4 +156,3 @@ int PredictSignal(const double inputs[], double &tp, double &sl)
 }
 
 //+------------------------------------------------------------------+
-
